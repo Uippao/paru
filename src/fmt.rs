@@ -13,6 +13,12 @@ use chrono::{Local, TimeZone, Utc};
 use tr::tr;
 use unicode_width::UnicodeWidthStr;
 
+use std::collections::HashMap;
+use std::fs::File;
+use std::path::PathBuf;
+use std::io::{BufRead, BufReader};
+use std::sync::OnceLock;
+
 struct ToInstall {
     install: Vec<String>,
     make_install: Vec<String>,
@@ -117,20 +123,60 @@ pub fn print_indent<S: AsRef<str>>(
 
 use ansiterm::Color;
 
+static REPO_COLORS: OnceLock<HashMap<String, u8>> = OnceLock::new();
+
+fn repo_colors_path() -> Option<PathBuf> {
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        let path = PathBuf::from(xdg).join("paru/RepoColors.txt");
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    if let Ok(home) = std::env::var("HOME") {
+        let path = PathBuf::from(home).join(".config/paru/RepoColors.txt");
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    None
+}
+
+fn load_repo_colors() -> HashMap<String, u8> {
+    let mut map = HashMap::new();
+    if let Some(path) = repo_colors_path() {
+        if let Ok(file) = File::open(path) {
+            for line in BufReader::new(file).lines().flatten() {
+                if let Some((repo, color)) = line.split_once('=') {
+                    if let Ok(color_num) = color.trim().parse::<u8>() {
+                        map.insert(repo.trim().to_string(), color_num);
+                    }
+                }
+            }
+        }
+    }
+    map
+}
+
 pub fn color_repo(enabled: bool, name: &str) -> String {
     if !enabled {
         return name.to_string();
     }
 
-    let mut col: u32 = 5;
+    let map = REPO_COLORS.get_or_init(load_repo_colors);
 
-    for &b in name.as_bytes() {
-        col = (b as u32).wrapping_add((col << 4).wrapping_add(col));
-    }
+    let col: u8 = if let Some(&c) = map.get(name) {
+        c
+    } else {
+        let mut col: u32 = 5;
+        for &b in name.as_bytes() {
+            col = (b as u32).wrapping_add((col << 4).wrapping_add(col));
+        }
+        (col % 6 + 9) as u8
+    };
 
-    col = (col % 6) + 9;
-    let col = Style::from(Color::Fixed(col as u8)).bold();
-    col.paint(name).to_string()
+    Style::from(Color::Fixed(col)).bold().paint(name).to_string()
 }
 
 pub fn print_target(targ: &str, quiet: bool) {
